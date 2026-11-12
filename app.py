@@ -1,3 +1,4 @@
+import io
 import os
 import re
 
@@ -13,6 +14,18 @@ from sklearn.metrics import (accuracy_score, classification_report, confusion_ma
 from sklearn.model_selection import train_test_split
 from sklearn.neural_network import MLPClassifier
 from wordcloud import WordCloud
+
+# Ukuran font & DPI eksplisit supaya grafik tidak berantakan
+plt.rcParams.update({
+    "figure.dpi": 100,
+    "savefig.dpi": 150,
+    "font.size": 10,
+    "axes.titlesize": 12,
+    "axes.labelsize": 10,
+    "xtick.labelsize": 9,
+    "ytick.labelsize": 9,
+    "figure.autolayout": False,
+})
 
 st.set_page_config(page_title="Sentimen Listrik Pontianak", page_icon="⚡", layout="wide")
 
@@ -74,6 +87,30 @@ STOPWORD = {
     "yg", "dgn", "utk", "tp", "sih", "lah", "kok", "ya", "kan", "rt", "amp",
     "para", "sebagai", "lagi", "masih", "banget", "gak", "nggak", "ga",
 }
+
+
+# ----------------------------------------------------------------------------
+# Helper tampilan
+# ----------------------------------------------------------------------------
+def tampil_tabel(data, **kw):
+    """st.dataframe lebar penuh; kompatibel dengan Streamlit lama maupun baru."""
+    try:
+        st.dataframe(data, width="stretch", **kw)
+    except Exception:  # Streamlit versi lama belum mengenal width="stretch"
+        st.dataframe(data, use_container_width=True, **kw)
+
+
+def tampil_plot(fig):
+    """Render figure ke PNG lalu tampilkan, supaya skala & font konsisten
+    di semua versi Streamlit (tidak bergantung pada perilaku st.pyplot)."""
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=150, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+    data = buf.getvalue()
+    try:
+        st.image(data, width="stretch")
+    except Exception:  # Streamlit versi lama
+        st.image(data, use_column_width=True)
 
 
 # ----------------------------------------------------------------------------
@@ -204,14 +241,6 @@ def prediksi(teks, hasil_model):
 # ----------------------------------------------------------------------------
 # Sidebar
 # ----------------------------------------------------------------------------
-def tampil_tabel(data, **kw):
-    """st.dataframe lebar penuh; kompatibel dengan Streamlit lama maupun baru."""
-    try:
-        st.dataframe(data, width="stretch", **kw)
-    except Exception:  # Streamlit versi lama belum mengenal width="stretch"
-        st.dataframe(data, use_container_width=True, **kw)
-
-
 st.title("⚡ Analisis Sentimen Pemadaman Listrik")
 st.caption("Pipeline: cleansing → normalisasi → pelabelan rule-based → TF-IDF → Neural Network (MLP)")
 
@@ -269,20 +298,37 @@ with tab_data:
 # ----------------------------------------------------------------------------
 with tab_dist:
     dist = df["sentimen"].value_counts().reindex(LABEL_ORDER).fillna(0).astype(int)
+    total = max(int(dist.sum()), 1)
+
     kolom = st.columns(3)
     for k, lab in zip(kolom, LABEL_ORDER):
-        k.metric(f"{EMOJI[lab]} {lab.capitalize()}", int(dist[lab]),
-                 f"{dist[lab] / dist.sum():.2%}", delta_color="off")
-    fig, axes = plt.subplots(1, 2, figsize=(11, 4))
-    bars = axes[0].bar(dist.index, dist.values, color=[WARNA[l] for l in dist.index])
-    axes[0].bar_label(bars)
-    axes[0].set_title("Jumlah Tweet per Sentimen")
-    axes[1].pie(dist.values, labels=dist.index, colors=[WARNA[l] for l in dist.index],
-                autopct="%1.1f%%", startangle=90)
-    axes[1].set_title("Proporsi Sentimen")
-    plt.tight_layout()
-    st.pyplot(fig)
-    plt.close(fig)
+        k.metric(f"{EMOJI[lab]} {lab.capitalize()}", int(dist[lab]))
+        k.caption(f"{dist[lab] / total:.2%} dari total")
+
+    kiri, kanan = st.columns(2)
+
+    with kiri:
+        fig, ax = plt.subplots(figsize=(5.5, 4))
+        bars = ax.bar(dist.index, dist.values, color=[WARNA[l] for l in dist.index])
+        ax.bar_label(bars, padding=3)
+        ax.set_title("Jumlah Tweet per Sentimen")
+        ax.set_ylabel("Jumlah tweet")
+        ax.set_ylim(0, dist.max() * 1.15 if dist.max() > 0 else 1)
+        ax.spines[["top", "right"]].set_visible(False)
+        fig.tight_layout()
+        tampil_plot(fig)
+
+    with kanan:
+        ada = dist[dist > 0]  # kelas kosong tidak digambar agar label tidak menumpuk
+        fig, ax = plt.subplots(figsize=(5.5, 4))
+        ax.pie(ada.values, labels=[l.capitalize() for l in ada.index],
+               colors=[WARNA[l] for l in ada.index], autopct="%1.1f%%", startangle=90,
+               pctdistance=0.7, textprops={"fontsize": 10},
+               wedgeprops={"edgecolor": "white", "linewidth": 1.5})
+        ax.set_title("Proporsi Sentimen")
+        ax.axis("equal")
+        fig.tight_layout()
+        tampil_plot(fig)
 
 # ----------------------------------------------------------------------------
 # Tab 3: WordCloud (Langkah 6)
@@ -299,8 +345,8 @@ with tab_wc:
                 fig, ax = plt.subplots(figsize=(6, 4))
                 ax.imshow(wc, interpolation="bilinear")
                 ax.axis("off")
-                st.pyplot(fig)
-                plt.close(fig)
+                fig.tight_layout(pad=0)
+                tampil_plot(fig)
             else:
                 st.info("Tidak ada data.")
 
@@ -331,30 +377,31 @@ with tab_eval:
             y_test, y_pred, labels=labels_ada, output_dict=True, zero_division=0)).T.round(3))
     with kanan:
         st.subheader("Grafik metrik")
-        fig, ax = plt.subplots(figsize=(5.5, 3.6))
+        fig, ax = plt.subplots(figsize=(5.5, 3.8))
         bars = ax.bar(ringkas["Metrik"], ringkas["Nilai"], color="#4a90d9")
-        ax.bar_label(bars, fmt="%.3f")
-        ax.set_ylim(0, 1.1)
+        ax.bar_label(bars, fmt="%.3f", padding=3)
+        ax.set_ylim(0, 1.15)
         ax.tick_params(axis="x", rotation=20)
-        plt.tight_layout()
-        st.pyplot(fig)
-        plt.close(fig)
+        ax.spines[["top", "right"]].set_visible(False)
+        fig.tight_layout()
+        tampil_plot(fig)
 
     st.subheader("Confusion Matrix")
     cm = confusion_matrix(y_test, y_pred, labels=labels_ada)
-    fig, ax = plt.subplots(figsize=(5, 4))
-    ax.imshow(cm, cmap="Blues")
-    ax.set_xticks(range(len(labels_ada)), labels_ada)
-    ax.set_yticks(range(len(labels_ada)), labels_ada)
-    ax.set_xlabel("Prediksi")
-    ax.set_ylabel("Aktual")
-    for i in range(len(labels_ada)):
-        for j in range(len(labels_ada)):
-            ax.text(j, i, cm[i, j], ha="center", va="center",
-                    color="white" if cm[i, j] > cm.max() / 2 else "black")
-    plt.tight_layout()
-    st.pyplot(fig)
-    plt.close(fig)
+    _, tengah, _ = st.columns([1, 2, 1])
+    with tengah:
+        fig, ax = plt.subplots(figsize=(5, 4))
+        ax.imshow(cm, cmap="Blues")
+        ax.set_xticks(range(len(labels_ada)), labels_ada)
+        ax.set_yticks(range(len(labels_ada)), labels_ada)
+        ax.set_xlabel("Prediksi")
+        ax.set_ylabel("Aktual")
+        for i in range(len(labels_ada)):
+            for j in range(len(labels_ada)):
+                ax.text(j, i, cm[i, j], ha="center", va="center",
+                        color="white" if cm[i, j] > cm.max() / 2 else "black")
+        fig.tight_layout()
+        tampil_plot(fig)
 
     st.warning(
         "**Catatan:** label dibuat otomatis dari kamus kata positif/negatif, lalu kata-kata yang sama "
